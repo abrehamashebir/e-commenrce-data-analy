@@ -1,39 +1,53 @@
+import asyncio
+from datetime import datetime
+from pathlib import Path
 import pandas as pd
-from telethon.sync import TelegramClient
-from config.paths import paths
-from typing import List, Optional
-import logging
+from telethon import TelegramClient
 
 class TelegramScraper:
-    def __init__(self, api_id: str, api_hash: str, channels: List[str]):
+    def __init__(self, api_id: str, api_hash: str):
         self.client = TelegramClient('session', api_id, api_hash)
-        self.channels = channels
-        
-    async def _scrape_channel(self, channel: str, limit: int = 1000):
+        self.output_dir = Path('data/raw')
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    async def scrape_channel(self, channel: str, limit: int = 100) -> pd.DataFrame:
+        """Scrape messages from a single channel"""
         messages = []
-        async for message in self.client.iter_messages(channel, limit=limit):
+        async for msg in self.client.iter_messages(channel, limit=limit):
             messages.append({
                 'channel': channel,
-                'message_id': message.id,
-                'date': message.date,
-                'views': message.views,
-                'text': message.text,
-                'media': bool(message.media)
+                'message_id': msg.id,
+                'date': msg.date,
+                'views': msg.views,
+                'text': msg.text,
+                'has_media': bool(msg.media)
             })
-        return messages
+        return pd.DataFrame(messages)
+
+    def save_to_csv(self, df: pd.DataFrame) -> str:
+        """Save DataFrame to timestamped CSV file"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"telegram_{timestamp}.csv"
+        filepath = self.output_dir / filename
+        df.to_csv(filepath, index=False)
+        return str(filepath)
+
+async def main():
+    scraper = TelegramScraper(
+        api_id='23735929',
+        api_hash='36c1864894007dcb935128b3252887a9'
+    )
     
-    async def scrape_all(self, limit: Optional[int] = None):
-        all_messages = []
-        for channel in self.channels:
-            try:
-                messages = await self._scrape_channel(channel, limit)
-                all_messages.extend(messages)
-                logging.info(f"Scraped {len(messages)} messages from {channel}")
-            except Exception as e:
-                logging.error(f"Error scraping {channel}: {str(e)}")
-        return pd.DataFrame(all_messages)
-    
-    def save_raw_data(self, df: pd.DataFrame, filename: str = "telegram_data.csv"):
-        path = paths.RAW_DATA / filename
-        df.to_csv(path, index=False)
-        logging.info(f"Saved raw data to {path}")
+    channels = ['ZemenExpress', 'nevacomputer', 'meneshayeofficial']
+    all_data = pd.DataFrame()
+
+    async with scraper.client:
+        for channel in channels:
+            channel_data = await scraper.scrape_channel(channel, limit=100)
+            all_data = pd.concat([all_data, channel_data])
+        
+        saved_path = scraper.save_to_csv(all_data)
+        print(f"Data successfully saved to: {saved_path}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
